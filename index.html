@@ -84,7 +84,12 @@
         // 効果音生成 (Web Audio API)
         const playFeedbackSound = (score) => {
             try {
-                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                const ctx = new AudioContext();
+                
+                // iOS対策: ユーザーアクション内での再開
+                if (ctx.state === 'suspended') ctx.resume();
+
                 const masterGain = ctx.createGain();
                 masterGain.connect(ctx.destination);
                 masterGain.gain.setValueAtTime(0.2, ctx.currentTime);
@@ -195,7 +200,7 @@
             const startPractice = async (index) => {
                 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
                 if (!SpeechRecognition) {
-                    setError("音声認識がサポートされていません。Chromeをご利用ください。");
+                    setError("音声認識がサポートされていません。ChromeまたはiOS Safariの最新版をご利用ください。");
                     return;
                 }
 
@@ -210,9 +215,22 @@
                 newList[index].triggerAnim = false;
                 setWordList(newList);
 
+                const recognition = new SpeechRecognition();
+                recognition.lang = 'en-US';
+                recognition.interimResults = false;
+                recognition.maxAlternatives = 1;
+
                 try {
+                    // iPhone対策: MediaRecorderを音声認識と競合させないために設定を工夫
                     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
+                    
+                    // iOS互換性のあるMIMEタイプ
+                    const mimeType = MediaRecorder.isTypeSupported('audio/mp4') 
+                                     ? 'audio/mp4' 
+                                     : MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
+                                     ? 'audio/webm;codecs=opus' 
+                                     : 'audio/webm';
+                                     
                     mediaRecorderRef.current = new MediaRecorder(stream, { mimeType });
                     
                     mediaRecorderRef.current.ondataavailable = (e) => {
@@ -226,13 +244,15 @@
                     };
 
                     mediaRecorderRef.current.start();
+                    recognition.start();
+
                 } catch (e) { 
-                    setError("マイクの使用が許可されていません。");
+                    setError("マイクの使用が許可されていないか、他のアプリがマイクを使用中です。");
                     console.error(e);
+                    setRecordingIndex(null);
+                    return;
                 }
 
-                const recognition = new SpeechRecognition();
-                recognition.lang = 'en-US';
                 recognition.onresult = async (event) => {
                     const duration = Date.now() - recordingStartTimeRef.current;
                     const result = event.results[0][0].transcript.toLowerCase();
@@ -244,13 +264,29 @@
                         recognized: result, userIpa: details.ipa, score: score, triggerAnim: true, duration: duration
                     });
                 };
-                recognition.onend = () => {
-                    setRecordingIndex(null);
-                    if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
-                        mediaRecorderRef.current.stop();
+
+                recognition.onerror = (e) => {
+                    console.error("Speech Recognition Error:", e);
+                    if (e.error === 'no-speech') {
+                        setError("声が検出されませんでした。");
+                    } else if (e.error === 'not-allowed') {
+                        setError("マイクの許可が必要です。");
+                    } else {
+                        setError("音声認識中にエラーが発生しました。");
                     }
+                    stopPractice();
                 };
-                recognition.start();
+
+                recognition.onend = () => {
+                    stopPractice();
+                };
+            };
+
+            const stopPractice = () => {
+                setRecordingIndex(null);
+                if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+                    mediaRecorderRef.current.stop();
+                }
             };
 
             const calculateScore = (target, actual, durationMs) => {
@@ -378,6 +414,12 @@
                             </div>
                         )}
                     </div>
+
+                    {error && (
+                        <div className="mt-4 bg-rose-500/10 border border-rose-500/50 text-rose-400 p-3 rounded-xl text-xs flex items-center gap-3 animate-pulse">
+                            <i className="fa-solid fa-circle-exclamation"></i> {error}
+                        </div>
+                    )}
                 </div>
             );
         };
