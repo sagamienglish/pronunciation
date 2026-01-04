@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pronunciation Training</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&family=JetBrains+Mono:wght@500&display=swap');
+        
+        :root {
+            --primary: #0ea5e9;
+            --bg: #0f172a;
+            --card-bg: #1e293b;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg);
+            color: #f1f5f9;
+            min-height: 100vh;
+        }
+
+        .ipa-font {
+            font-family: 'Lucida Sans Unicode', 'Arial Unicode MS', sans-serif;
+        }
+
+        .list-item {
+            transition: all 0.2s ease;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .list-item:hover {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        @keyframes recording-pulse {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+
+        .is-recording {
+            animation: recording-pulse 1.5s infinite;
+            background-color: #ef4444 !important;
+            color: white !important;
+        }
+
+        @keyframes score-pop {
+            0% { transform: scale(0.5); opacity: 0; }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        .animate-score {
+            animation: score-pop 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-5px); }
+        }
+
+        .animate-float {
+            animation: float 2s ease-in-out infinite;
+        }
+
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: var(--bg); }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo } = React;
+
+        const playFeedbackSound = (score) => {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const masterGain = ctx.createGain();
+            masterGain.connect(ctx.destination);
+            masterGain.gain.setValueAtTime(0.2, ctx.currentTime);
+
+            if (score >= 8) {
+                [523.25, 659.25, 783.99, 1046.50].forEach((freq, i) => {
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(freq, ctx.currentTime + i * 0.08);
+                    gain.gain.setValueAtTime(0, ctx.currentTime + i * 0.08);
+                    gain.gain.linearRampToValueAtTime(0.15, ctx.currentTime + i * 0.08 + 0.04);
+                    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.08 + 0.4);
+                    osc.connect(gain);
+                    gain.connect(masterGain);
+                    osc.start(ctx.currentTime + i * 0.08);
+                    osc.stop(ctx.currentTime + i * 0.08 + 0.4);
+                });
+            } else {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(220, ctx.currentTime);
+                osc.frequency.linearRampToValueAtTime(196, ctx.currentTime + 0.3);
+                gain.gain.setValueAtTime(0.15, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+                osc.connect(gain);
+                gain.connect(masterGain);
+                osc.start();
+                osc.stop(ctx.currentTime + 0.3);
+            }
+        };
+
+        const App = () => {
+            const [inputText, setInputText] = useState("environment, technology, education, communication, pronunciation");
+            const [wordList, setWordList] = useState([]);
+            const [recordingIndex, setRecordingIndex] = useState(null);
+            const [error, setError] = useState("");
+            const recordingStartTimeRef = useRef(null);
+
+            const mediaRecorderRef = useRef(null);
+            const chunksRef = useRef([]);
+
+            const fetchWordDetails = async (word) => {
+                try {
+                    const response = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${word}`);
+                    if (!response.ok) return { ipa: `/${word}/`, audio: null };
+                    const data = await response.json();
+                    
+                    let bestIpa = "";
+                    let bestAudio = null;
+
+                    for (const entry of data) {
+                        if (!bestIpa && entry.phonetic) bestIpa = entry.phonetic;
+                        if (entry.phonetics) {
+                            for (const p of entry.phonetics) {
+                                if (!bestIpa && p.text) bestIpa = p.text;
+                                if (p.audio && p.audio.includes('.mp3')) {
+                                    if (!bestAudio || p.audio.includes('-us')) bestAudio = p.audio;
+                                }
+                            }
+                        }
+                    }
+                    if (word.toLowerCase().includes('environment') && (!bestIpa || bestIpa === '/environment/')) bestIpa = "/ɪnˈvaɪrənmənt/";
+                    return { ipa: bestIpa || `/${word}/`, audio: bestAudio };
+                } catch {
+                    return { ipa: `/${word}/`, audio: null };
+                }
+            };
+
+            const handleSetWords = async () => {
+                const words = inputText.split(',').map(w => w.trim()).filter(w => w.length > 0).slice(0, 10);
+                if (words.length === 0) return;
+                const newList = words.map(w => ({
+                    text: w, ipa: "...", audioUrl: null, score: null, userAudio: null, recognized: "", userIpa: "", triggerAnim: false, duration: 0
+                }));
+                setWordList(newList);
+                const updatedList = await Promise.all(newList.map(async (item) => {
+                    const details = await fetchWordDetails(item.text);
+                    return { ...item, ipa: details.ipa, audioUrl: details.audio };
+                }));
+                setWordList(updatedList);
+            };
+
+            useEffect(() => { handleSetWords(); }, []);
+
+            const playAudio = (url, word) => {
+                if (url) {
+                    const audio = new Audio(url);
+                    audio.play().catch(() => speakTTS(word));
+                } else {
+                    speakTTS(word);
+                }
+            };
+
+            const speakTTS = (word) => {
+                const utterance = new SpeechSynthesisUtterance(word);
+                utterance.lang = 'en-US';
+                window.speechSynthesis.speak(utterance);
+            };
+
+            const startPractice = async (index) => {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                if (!SpeechRecognition) {
+                    setError("Speech recognition not supported.");
+                    return;
+                }
+
+                setRecordingIndex(index);
+                setError("");
+                recordingStartTimeRef.current = Date.now();
+                chunksRef.current = []; // Clear chunks
+
+                const newList = [...wordList];
+                newList[index].score = null;
+                newList[index].userAudio = null;
+                newList[index].triggerAnim = false;
+                setWordList(newList);
+
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    mediaRecorderRef.current = new MediaRecorder(stream);
+                    
+                    mediaRecorderRef.current.ondataavailable = (e) => {
+                        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+                    };
+
+                    mediaRecorderRef.current.onstop = () => {
+                        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+                        updateWordState(index, { userAudio: blob });
+                    };
+
+                    mediaRecorderRef.current.start();
+                } catch (e) { 
+                    setError("Mic access denied.");
+                }
+
+                const recognition = new SpeechRecognition();
+                recognition.lang = 'en-US';
+                recognition.onresult = async (event) => {
+                    const duration = Date.now() - recordingStartTimeRef.current;
+                    const result = event.results[0][0].transcript.toLowerCase();
+                    const details = await fetchWordDetails(result);
+                    const score = calculateScore(wordList[index].text.toLowerCase(), result, duration);
+                    
+                    playFeedbackSound(score);
+                    updateWordState(index, { 
+                        recognized: result, userIpa: details.ipa, score: score, triggerAnim: true, duration: duration
+                    });
+                };
+                recognition.onend = () => {
+                    setRecordingIndex(null);
+                    if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+                        mediaRecorderRef.current.stop();
+                        mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+                    }
+                };
+                recognition.start();
+            };
+
+            const calculateScore = (target, actual, durationMs) => {
+                const t = target.trim();
+                const a = actual.trim();
+                let baseScore = (t === a) ? 10 : Math.max(1, Math.floor((Array.from(t).filter((c, i) => a[i] === c).length / Math.max(t.length, a.length)) * 10));
+                const expectedDuration = t.length * 250; 
+                let penalty = (durationMs > expectedDuration * 2.5) ? 3 : (durationMs > expectedDuration * 1.8) ? 1 : 0;
+                return Math.max(0, baseScore - penalty);
+            };
+
+            const updateWordState = (index, data) => {
+                setWordList(prev => {
+                    const updated = [...prev];
+                    updated[index] = { ...updated[index], ...data };
+                    return updated;
+                });
+            };
+
+            const totalScoreValue = useMemo(() => wordList.filter(w => w.score !== null).reduce((acc, curr) => acc + curr.score, 0), [wordList]);
+
+            const getRankInfo = (score) => {
+                if (score === 0) return { icon: "🌑", text: "Ready?" };
+                const thresholds = [10, 20, 35, 50, 65, 80, 90, 100];
+                const labels = ["Newbie", "Growing", "Improving", "Skilled", "Excellent", "Brilliant", "Champion", "Grand Master", "Legendary"];
+                const icons = ["💤", "🌱", "🌿", "🎯", "🔥", "🌟", "🏆", "👑", "💎"];
+                let idx = thresholds.findIndex(t => score < t);
+                if (idx === -1) idx = labels.length - 1;
+                return { icon: icons[idx], text: labels[idx] };
+            };
+
+            const rank = useMemo(() => getRankInfo(totalScoreValue), [totalScoreValue]);
+
+            const UserResultRow = ({ modelIpa, userIpa, recognized }) => {
+                if (!userIpa) return null;
+                const mChars = modelIpa.replace(/\//g, '').split('');
+                const uChars = userIpa.replace(/\//g, '').split('');
+                return (
+                    <div className="flex items-center gap-3 animate-fade-in bg-slate-900/40 px-2 py-1 rounded-md mt-1 border border-slate-700/50">
+                        <span className="text-[10px] text-emerald-400 font-bold uppercase">Result:</span>
+                        <span className="text-white text-xs font-bold italic">"{recognized}"</span>
+                        <div className="ipa-font text-rose-400 text-xs">
+                            /
+                            {uChars.map((char, i) => {
+                                const isDiff = i >= mChars.length || char !== mChars[i];
+                                return <span key={i} className={isDiff ? "font-black text-rose-500 underline decoration-2" : ""}>{char}</span>;
+                            })}
+                            /
+                        </div>
+                    </div>
+                );
+            };
+
+            return (
+                <div className="max-w-4xl mx-auto px-4 py-6">
+                    <header className="mb-6 border-l-4 border-sky-500 pl-6">
+                        <h1 className="text-2xl font-black tracking-tight text-white uppercase">Pronunciation Training</h1>
+                    </header>
+
+                    <div className="bg-slate-800/50 p-3 rounded-xl border border-slate-700 shadow-xl mb-4">
+                        <div className="flex gap-2">
+                            <input type="text" value={inputText} onChange={(e) => setInputText(e.target.value)}
+                                className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-sky-500 text-sm"
+                                placeholder="単語をカンマ区切りで入力..." />
+                            <button onClick={handleSetWords} className="bg-sky-600 hover:bg-sky-500 text-white font-bold px-4 py-1.5 rounded-lg transition active:scale-95 text-sm flex items-center gap-2">
+                                <i className="fa-solid fa-list-check"></i> 決定
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="bg-slate-800 rounded-xl border border-slate-700 shadow-xl overflow-hidden">
+                        <div className="divide-y divide-slate-700">
+                            {wordList.map((item, idx) => (
+                                <div key={idx} className="list-item flex flex-col p-2 px-4">
+                                    <div className="flex items-center justify-between gap-4">
+                                        {/* vocabulary and model ipa same line */}
+                                        <div className="flex items-center gap-3 flex-1 overflow-hidden">
+                                            <span className="text-base font-extrabold text-white truncate">{item.text}</span>
+                                            <span className="ipa-font text-sky-400 text-xs bg-sky-900/30 px-2 py-0.5 rounded border border-sky-800/50">{item.ipa}</span>
+                                        </div>
+
+                                        {/* controls and score same line */}
+                                        <div className="flex items-center gap-3">
+                                            <div className="flex items-center gap-1.5 bg-slate-900/50 p-1 rounded-lg">
+                                                <button onClick={() => playAudio(item.audioUrl, item.text)} className="w-8 h-8 flex items-center justify-center rounded bg-slate-700 hover:bg-slate-600 text-sky-400 text-xs transition active:scale-90" title="Listen"><i className="fa-solid fa-volume-high"></i></button>
+                                                <button onClick={() => startPractice(idx)} disabled={recordingIndex !== null} className={`w-8 h-8 flex items-center justify-center rounded text-xs transition active:scale-90 ${recordingIndex === idx ? 'is-recording' : 'bg-slate-700 hover:bg-slate-600 text-rose-400 disabled:opacity-30'}`} title="Mic"><i className={`fa-solid ${recordingIndex === idx ? 'fa-stop' : 'fa-microphone'}`}></i></button>
+                                                <button onClick={() => item.userAudio && new Audio(URL.createObjectURL(item.userAudio)).play()} disabled={!item.userAudio} className={`w-8 h-8 flex items-center justify-center rounded text-xs transition active:scale-90 ${item.userAudio ? 'bg-emerald-600 text-white hover:bg-emerald-500' : 'bg-slate-800 text-slate-600 cursor-not-allowed opacity-30'}`} title="Replay"><i className="fa-solid fa-play"></i></button>
+                                            </div>
+
+                                            <div className="w-12 text-right">
+                                                {item.score !== null ? (
+                                                    <div className={`text-xl font-black ${item.score >= 8 ? 'text-emerald-500' : item.score >= 5 ? 'text-amber-500' : 'text-rose-500'} ${item.triggerAnim ? 'animate-score' : ''}`}>
+                                                        {item.score}<span className="text-[8px] text-slate-500 ml-0.5">/10</span>
+                                                    </div>
+                                                ) : <span className="text-slate-700 font-bold text-sm">--</span>}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    {/* User result section below vocabulary */}
+                                    {item.recognized && (
+                                        <div className="flex justify-between items-center">
+                                            <UserResultRow modelIpa={item.ipa} userIpa={item.userIpa} recognized={item.recognized} />
+                                            {item.duration > item.text.length * 250 * 1.8 && (
+                                                <span className="text-[8px] text-rose-400 font-bold uppercase bg-rose-900/20 px-1 rounded">Too Slow</span>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+
+                        {wordList.length > 0 && (
+                            <div className="p-4 bg-slate-900/80 border-t border-slate-700 flex justify-between items-center">
+                                <div className="flex items-center gap-3">
+                                    <div className="text-4xl animate-float">{rank.icon}</div>
+                                    <div>
+                                        <div className="text-slate-500 text-[10px] font-black uppercase tracking-widest">Rank</div>
+                                        <div className="text-sky-400 text-xs font-bold uppercase">{rank.text}</div>
+                                    </div>
+                                </div>
+                                <div className="flex flex-col items-end">
+                                    <span className="text-slate-400 text-[10px] font-bold uppercase">Total Score</span>
+                                    <div className="bg-sky-500 text-white px-4 py-1 rounded-xl text-2xl font-black shadow-lg shadow-sky-900/40">
+                                        {totalScoreValue}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
