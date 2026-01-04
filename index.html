@@ -134,6 +134,7 @@
             const recordingStartTimeRef = useRef(null);
             const mediaRecorderRef = useRef(null);
             const chunksRef = useRef([]);
+            const recognitionRef = useRef(null);
 
             // 辞書データ取得
             const fetchWordDetails = async (word) => {
@@ -197,13 +198,15 @@
                 window.speechSynthesis.speak(utterance);
             };
 
+            // 練習開始
             const startPractice = async (index) => {
                 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
                 if (!SpeechRecognition) {
-                    setError("音声認識がサポートされていません。ChromeまたはiOS Safariの最新版をご利用ください。");
+                    setError("お使いのブラウザは音声認識をサポートしていません。ChromeまたはiOS Safariをご利用ください。");
                     return;
                 }
 
+                // 状態リセット
                 setRecordingIndex(index);
                 setError("");
                 recordingStartTimeRef.current = Date.now();
@@ -215,16 +218,45 @@
                 newList[index].triggerAnim = false;
                 setWordList(newList);
 
+                // 音声認識オブジェクト作成
                 const recognition = new SpeechRecognition();
                 recognition.lang = 'en-US';
                 recognition.interimResults = false;
                 recognition.maxAlternatives = 1;
+                recognitionRef.current = recognition;
+
+                recognition.onresult = async (event) => {
+                    const duration = Date.now() - recordingStartTimeRef.current;
+                    const result = event.results[0][0].transcript.toLowerCase();
+                    const details = await fetchWordDetails(result);
+                    const score = calculateScore(wordList[index].text.toLowerCase(), result, duration);
+                    
+                    playFeedbackSound(score);
+                    updateWordState(index, { 
+                        recognized: result, userIpa: details.ipa, score: score, triggerAnim: true, duration: duration
+                    });
+                };
+
+                recognition.onerror = (e) => {
+                    console.error("Speech Recognition Error:", e);
+                    if (e.error !== 'aborted') {
+                         setError(`音声認識エラー: ${e.error}`);
+                         stopPractice();
+                    }
+                };
+
+                recognition.onend = () => {
+                    stopPractice();
+                };
 
                 try {
-                    // iPhone対策: MediaRecorderを音声認識と競合させないために設定を工夫
+                    // iPhone対策: ユーザーアクション(click)の中で直接startを呼ぶ
+                    recognition.start();
+
+                    // 録音用のストリーム取得
                     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                     
-                    // iOS互換性のあるMIMEタイプ
+                    // iOS互換性のあるMIMEタイプ優先
                     const mimeType = MediaRecorder.isTypeSupported('audio/mp4') 
                                      ? 'audio/mp4' 
                                      : MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
@@ -244,46 +276,20 @@
                     };
 
                     mediaRecorderRef.current.start();
-                    recognition.start();
-
                 } catch (e) { 
-                    setError("マイクの使用が許可されていないか、他のアプリがマイクを使用中です。");
+                    setError("マイクへのアクセスに失敗しました。");
                     console.error(e);
+                    recognition.abort();
                     setRecordingIndex(null);
-                    return;
                 }
-
-                recognition.onresult = async (event) => {
-                    const duration = Date.now() - recordingStartTimeRef.current;
-                    const result = event.results[0][0].transcript.toLowerCase();
-                    const details = await fetchWordDetails(result);
-                    const score = calculateScore(wordList[index].text.toLowerCase(), result, duration);
-                    
-                    playFeedbackSound(score);
-                    updateWordState(index, { 
-                        recognized: result, userIpa: details.ipa, score: score, triggerAnim: true, duration: duration
-                    });
-                };
-
-                recognition.onerror = (e) => {
-                    console.error("Speech Recognition Error:", e);
-                    if (e.error === 'no-speech') {
-                        setError("声が検出されませんでした。");
-                    } else if (e.error === 'not-allowed') {
-                        setError("マイクの許可が必要です。");
-                    } else {
-                        setError("音声認識中にエラーが発生しました。");
-                    }
-                    stopPractice();
-                };
-
-                recognition.onend = () => {
-                    stopPractice();
-                };
             };
 
             const stopPractice = () => {
                 setRecordingIndex(null);
+                if (recognitionRef.current) {
+                    recognitionRef.current.onend = null;
+                    recognitionRef.current.stop();
+                }
                 if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
                     mediaRecorderRef.current.stop();
                 }
@@ -325,8 +331,8 @@
                 const mChars = modelIpa.replace(/\//g, '').split('');
                 const uChars = userIpa.replace(/\//g, '').split('');
                 return (
-                    <div className="flex items-center gap-3 animate-fade-in bg-slate-900/40 px-2 py-1 rounded-md mt-1 border border-slate-700/50 max-w-fit overflow-hidden">
-                        <span className="text-[10px] text-emerald-400 font-bold uppercase shrink-0">Result:</span>
+                    <div className="flex items-center gap-2 animate-fade-in bg-slate-900/40 px-2 py-0.5 rounded border border-slate-700/50 max-w-fit overflow-hidden">
+                        <span className="text-[10px] text-emerald-400 font-bold uppercase shrink-0">You:</span>
                         <span className="text-white text-xs font-bold italic shrink-0">"{recognized}"</span>
                         <div className="ipa-font text-rose-400 text-xs truncate">
                             /
