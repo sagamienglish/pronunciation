@@ -4,16 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Pronunciation Training</title>
+    <!-- React & Tailwind CSS -->
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Icons -->
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&family=JetBrains+Mono:wght@500&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&display=swap');
         
         :root {
-            --primary: #0ea5e9;
             --bg: #0f172a;
             --card-bg: #1e293b;
         }
@@ -80,39 +81,44 @@
     <script type="text/babel">
         const { useState, useEffect, useRef, useMemo } = React;
 
+        // 効果音生成 (Web Audio API)
         const playFeedbackSound = (score) => {
-            const ctx = new (window.AudioContext || window.webkitAudioContext)();
-            const masterGain = ctx.createGain();
-            masterGain.connect(ctx.destination);
-            masterGain.gain.setValueAtTime(0.2, ctx.currentTime);
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const masterGain = ctx.createGain();
+                masterGain.connect(ctx.destination);
+                masterGain.gain.setValueAtTime(0.2, ctx.currentTime);
 
-            if (score >= 8) {
-                [523.25, 659.25, 783.99, 1046.50].forEach((freq, i) => {
+                if (score >= 8) {
+                    // 高得点: 明るいチャイム
+                    [523.25, 659.25, 783.99, 1046.50].forEach((freq, i) => {
+                        const osc = ctx.createOscillator();
+                        const gain = ctx.createGain();
+                        osc.type = 'sine';
+                        osc.frequency.setValueAtTime(freq, ctx.currentTime + i * 0.08);
+                        gain.gain.setValueAtTime(0, ctx.currentTime + i * 0.08);
+                        gain.gain.linearRampToValueAtTime(0.15, ctx.currentTime + i * 0.08 + 0.04);
+                        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.08 + 0.4);
+                        osc.connect(gain);
+                        gain.connect(masterGain);
+                        osc.start(ctx.currentTime + i * 0.08);
+                        osc.stop(ctx.currentTime + i * 0.08 + 0.4);
+                    });
+                } else {
+                    // 低得点: 少し残念な音
                     const osc = ctx.createOscillator();
                     const gain = ctx.createGain();
-                    osc.type = 'sine';
-                    osc.frequency.setValueAtTime(freq, ctx.currentTime + i * 0.08);
-                    gain.gain.setValueAtTime(0, ctx.currentTime + i * 0.08);
-                    gain.gain.linearRampToValueAtTime(0.15, ctx.currentTime + i * 0.08 + 0.04);
-                    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.08 + 0.4);
+                    osc.type = 'sawtooth';
+                    osc.frequency.setValueAtTime(220, ctx.currentTime);
+                    osc.frequency.linearRampToValueAtTime(196, ctx.currentTime + 0.3);
+                    gain.gain.setValueAtTime(0.15, ctx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
                     osc.connect(gain);
                     gain.connect(masterGain);
-                    osc.start(ctx.currentTime + i * 0.08);
-                    osc.stop(ctx.currentTime + i * 0.08 + 0.4);
-                });
-            } else {
-                const osc = ctx.createOscillator();
-                const gain = ctx.createGain();
-                osc.type = 'sawtooth';
-                osc.frequency.setValueAtTime(220, ctx.currentTime);
-                osc.frequency.linearRampToValueAtTime(196, ctx.currentTime + 0.3);
-                gain.gain.setValueAtTime(0.15, ctx.currentTime);
-                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
-                osc.connect(gain);
-                gain.connect(masterGain);
-                osc.start();
-                osc.stop(ctx.currentTime + 0.3);
-            }
+                    osc.start();
+                    osc.stop(ctx.currentTime + 0.3);
+                }
+            } catch (e) { console.error("Audio error:", e); }
         };
 
         const App = () => {
@@ -121,16 +127,15 @@
             const [recordingIndex, setRecordingIndex] = useState(null);
             const [error, setError] = useState("");
             const recordingStartTimeRef = useRef(null);
-
             const mediaRecorderRef = useRef(null);
             const chunksRef = useRef([]);
 
+            // 辞書データ取得
             const fetchWordDetails = async (word) => {
                 try {
                     const response = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${word}`);
                     if (!response.ok) return { ipa: `/${word}/`, audio: null };
                     const data = await response.json();
-                    
                     let bestIpa = "";
                     let bestAudio = null;
 
@@ -145,7 +150,11 @@
                             }
                         }
                     }
-                    if (word.toLowerCase().includes('environment') && (!bestIpa || bestIpa === '/environment/')) bestIpa = "/ɪnˈvaɪrənmənt/";
+                    // 手動補正
+                    const lowerWord = word.toLowerCase();
+                    if (lowerWord.includes('environment') && (!bestIpa || bestIpa.length < 5)) bestIpa = "/ɪnˈvaɪrənmənt/";
+                    if (lowerWord.includes('technology') && (!bestIpa || bestIpa.length < 5)) bestIpa = "/tɛkˈnɒlədʒi/";
+                    
                     return { ipa: bestIpa || `/${word}/`, audio: bestAudio };
                 } catch {
                     return { ipa: `/${word}/`, audio: null };
@@ -186,14 +195,14 @@
             const startPractice = async (index) => {
                 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
                 if (!SpeechRecognition) {
-                    setError("Speech recognition not supported.");
+                    setError("音声認識がサポートされていません。Chromeをご利用ください。");
                     return;
                 }
 
                 setRecordingIndex(index);
                 setError("");
                 recordingStartTimeRef.current = Date.now();
-                chunksRef.current = []; // Clear chunks
+                chunksRef.current = [];
 
                 const newList = [...wordList];
                 newList[index].score = null;
@@ -203,20 +212,23 @@
 
                 try {
                     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    mediaRecorderRef.current = new MediaRecorder(stream);
+                    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
+                    mediaRecorderRef.current = new MediaRecorder(stream, { mimeType });
                     
                     mediaRecorderRef.current.ondataavailable = (e) => {
                         if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
                     };
 
                     mediaRecorderRef.current.onstop = () => {
-                        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+                        const blob = new Blob(chunksRef.current, { type: mimeType });
                         updateWordState(index, { userAudio: blob });
+                        stream.getTracks().forEach(track => track.stop());
                     };
 
                     mediaRecorderRef.current.start();
                 } catch (e) { 
-                    setError("Mic access denied.");
+                    setError("マイクの使用が許可されていません。");
+                    console.error(e);
                 }
 
                 const recognition = new SpeechRecognition();
@@ -236,7 +248,6 @@
                     setRecordingIndex(null);
                     if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
                         mediaRecorderRef.current.stop();
-                        mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
                     }
                 };
                 recognition.start();
@@ -278,14 +289,14 @@
                 const mChars = modelIpa.replace(/\//g, '').split('');
                 const uChars = userIpa.replace(/\//g, '').split('');
                 return (
-                    <div className="flex items-center gap-3 animate-fade-in bg-slate-900/40 px-2 py-1 rounded-md mt-1 border border-slate-700/50">
-                        <span className="text-[10px] text-emerald-400 font-bold uppercase">Result:</span>
-                        <span className="text-white text-xs font-bold italic">"{recognized}"</span>
-                        <div className="ipa-font text-rose-400 text-xs">
+                    <div className="flex items-center gap-3 animate-fade-in bg-slate-900/40 px-2 py-1 rounded-md mt-1 border border-slate-700/50 max-w-fit overflow-hidden">
+                        <span className="text-[10px] text-emerald-400 font-bold uppercase shrink-0">Result:</span>
+                        <span className="text-white text-xs font-bold italic shrink-0">"{recognized}"</span>
+                        <div className="ipa-font text-rose-400 text-xs truncate">
                             /
                             {uChars.map((char, i) => {
                                 const isDiff = i >= mChars.length || char !== mChars[i];
-                                return <span key={i} className={isDiff ? "font-black text-rose-500 underline decoration-2" : ""}>{char}</span>;
+                                return <span key={i} className={isDiff ? "font-black text-rose-500 underline decoration-2 underline-offset-2" : ""}>{char}</span>;
                             })}
                             /
                         </div>
@@ -315,18 +326,16 @@
                             {wordList.map((item, idx) => (
                                 <div key={idx} className="list-item flex flex-col p-2 px-4">
                                     <div className="flex items-center justify-between gap-4">
-                                        {/* vocabulary and model ipa same line */}
                                         <div className="flex items-center gap-3 flex-1 overflow-hidden">
                                             <span className="text-base font-extrabold text-white truncate">{item.text}</span>
-                                            <span className="ipa-font text-sky-400 text-xs bg-sky-900/30 px-2 py-0.5 rounded border border-sky-800/50">{item.ipa}</span>
+                                            <span className="ipa-font text-sky-400 text-xs bg-sky-900/30 px-2 py-0.5 rounded border border-sky-800/50 shrink-0">{item.ipa}</span>
                                         </div>
 
-                                        {/* controls and score same line */}
-                                        <div className="flex items-center gap-3">
+                                        <div className="flex items-center gap-3 shrink-0">
                                             <div className="flex items-center gap-1.5 bg-slate-900/50 p-1 rounded-lg">
-                                                <button onClick={() => playAudio(item.audioUrl, item.text)} className="w-8 h-8 flex items-center justify-center rounded bg-slate-700 hover:bg-slate-600 text-sky-400 text-xs transition active:scale-90" title="Listen"><i className="fa-solid fa-volume-high"></i></button>
-                                                <button onClick={() => startPractice(idx)} disabled={recordingIndex !== null} className={`w-8 h-8 flex items-center justify-center rounded text-xs transition active:scale-90 ${recordingIndex === idx ? 'is-recording' : 'bg-slate-700 hover:bg-slate-600 text-rose-400 disabled:opacity-30'}`} title="Mic"><i className={`fa-solid ${recordingIndex === idx ? 'fa-stop' : 'fa-microphone'}`}></i></button>
-                                                <button onClick={() => item.userAudio && new Audio(URL.createObjectURL(item.userAudio)).play()} disabled={!item.userAudio} className={`w-8 h-8 flex items-center justify-center rounded text-xs transition active:scale-90 ${item.userAudio ? 'bg-emerald-600 text-white hover:bg-emerald-500' : 'bg-slate-800 text-slate-600 cursor-not-allowed opacity-30'}`} title="Replay"><i className="fa-solid fa-play"></i></button>
+                                                <button onClick={() => playAudio(item.audioUrl, item.text)} className="w-8 h-8 flex items-center justify-center rounded bg-slate-700 hover:bg-slate-600 text-sky-400 text-xs transition active:scale-90" title="Model"><i className="fa-solid fa-volume-high"></i></button>
+                                                <button onClick={() => startPractice(idx)} disabled={recordingIndex !== null} className={`w-8 h-8 flex items-center justify-center rounded text-xs transition active:scale-90 ${recordingIndex === idx ? 'is-recording' : 'bg-slate-700 hover:bg-slate-600 text-rose-400 disabled:opacity-30'}`} title="Practice"><i className={`fa-solid ${recordingIndex === idx ? 'fa-stop' : 'fa-microphone'}`}></i></button>
+                                                <button onClick={() => item.userAudio && new Audio(URL.createObjectURL(item.userAudio)).play()} disabled={!item.userAudio} className={`w-8 h-8 flex items-center justify-center rounded text-xs transition active:scale-90 ${item.userAudio ? 'bg-emerald-600 text-white hover:bg-emerald-500 shadow-lg shadow-emerald-900/20' : 'bg-slate-800 text-slate-600 cursor-not-allowed opacity-30'}`} title="Replay"><i className="fa-solid fa-play"></i></button>
                                             </div>
 
                                             <div className="w-12 text-right">
@@ -339,12 +348,11 @@
                                         </div>
                                     </div>
                                     
-                                    {/* User result section below vocabulary */}
                                     {item.recognized && (
                                         <div className="flex justify-between items-center">
                                             <UserResultRow modelIpa={item.ipa} userIpa={item.userIpa} recognized={item.recognized} />
                                             {item.duration > item.text.length * 250 * 1.8 && (
-                                                <span className="text-[8px] text-rose-400 font-bold uppercase bg-rose-900/20 px-1 rounded">Too Slow</span>
+                                                <span className="text-[8px] text-rose-400 font-bold uppercase bg-rose-900/20 px-1 rounded shrink-0 ml-2">Too Slow</span>
                                             )}
                                         </div>
                                     )}
